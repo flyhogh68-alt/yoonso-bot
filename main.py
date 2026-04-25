@@ -16,176 +16,150 @@ TOKEN = "8501872381:AAGQWWvvtPd5AtJT_z5yJle1rtBJaz9zJuE"
 SEND_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
 
 
+from flask import Flask, request
+import requests
+import random
+import csv
+from datetime import datetime
+
+app = Flask(__name__)
+
 # =========================
-# 메시지 전송
+# 🔐 텔레그램 토큰
+# =========================
+TOKEN = "여기에_토큰"
+
+# =========================
+# 📡 텔레그램 전송 함수
 # =========================
 def send_message(chat_id, text):
-    try:
-        requests.post(SEND_URL, json={
-            "chat_id": chat_id,
-            "text": text
-        })
-    except Exception as e:
-        print("전송 에러:", e)
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    requests.post(url, json={"chat_id": chat_id, "text": text})
+
 
 # =========================
-# 🎲 로또
+# ❤️ 서버 생존 체크 (중요)
 # =========================
-def pick_lotto():
-    return sorted(random.sample(range(1, 46), 6))
+@app.route("/")
+def home():
+    return "alive"
+
 
 # =========================
-# 📈 시그널
+# 🎲 로또 v2 엔진
 # =========================
-def get_data(ticker):
-    try:
-        df = yf.download(ticker, period="1mo", interval="1d", progress=False)
-        return df
-    except:
-        return None
-
-def safe_prices(df):
-    try:
-        col = df["Close"]
-        return [float(x) for x in col.dropna().values.flatten()]
-    except:
-        return []
-
-def calc_rsi(prices, period=14):
-    if len(prices) < period:
-        return 50
-
-    gains, losses = [], []
-
-    for i in range(1, len(prices)):
-        diff = prices[i] - prices[i-1]
-        if diff > 0:
-            gains.append(diff)
+def has_long_consecutive(nums):
+    count = 1
+    for i in range(1, len(nums)):
+        if nums[i] == nums[i - 1] + 1:
+            count += 1
+            if count >= 3:
+                return True
         else:
-            losses.append(abs(diff))
+            count = 1
+    return False
 
-    avg_gain = sum(gains[-period:]) / period if gains else 0.001
-    avg_loss = sum(losses[-period:]) / period if losses else 0.001
 
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
-
-def run_signal(ticker):
-    df = get_data(ticker)
-
-    if df is None or df.empty:
-        return None, 0
-
-    prices = safe_prices(df)
-
-    if len(prices) < 5:
-        return None, 0
-
-    ma5 = sum(prices[-5:]) / 5
-    ma20 = sum(prices[-20:]) / 20 if len(prices) >= 20 else ma5
-    rsi = calc_rsi(prices)
-
+def lotto_score(nums):
     score = 0
-    cond = []
+    total = sum(nums)
 
-    if prices[-1] > ma5:
+    odd = len([n for n in nums if n % 2 == 1])
+    low = len([n for n in nums if n <= 22])
+
+    if 100 <= total <= 170:
         score += 1
-        cond.append("5일선 위")
-
-    if prices[-1] > ma20:
+    if odd in [2, 3, 4]:
         score += 1
-        cond.append("20일선 위")
-
-    if rsi > 50:
+    if low in [2, 3, 4]:
         score += 1
-        cond.append("RSI 상승")
+    if not has_long_consecutive(nums):
+        score += 1
 
-    msg = f"""📈 {ticker}
-점수: {score}/3
-조건: {", ".join(cond)}
+    return score
 
-현재가: {round(prices[-1],2)}
-RSI: {round(rsi,1)}"""
 
-    return msg, score
+def generate_lotto_v2(mode="basic"):
+    used = set()
+    results = []
+
+    target_count = 5 if mode == "all" else 1
+
+    while len(results) < target_count:
+        nums = sorted(random.sample(range(1, 46), 6))
+        key = tuple(nums)
+
+        if key in used:
+            continue
+
+        used.add(key)
+        sc = lotto_score(nums)
+
+        if mode == "stable" and sc < 4:
+            continue
+        if mode == "attack" and sc < 3:
+            continue
+        if mode == "basic" and sc < 3:
+            continue
+
+        results.append((nums, sc))
+
+    return results
+
+
+def save_lotto_log(nums, score, mode):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with open("lotto_log.csv", "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([now, mode] + nums + [score])
+
 
 # =========================
-# 🔥 능동 스캔
-# =========================
-WATCHLIST = ["AAPL", "NVDA", "TSLA", "MSFT"]
-
-def auto_scan(chat_id):
-
-    print("🔥 자동 스캔 시작")
-
-    while True:
-        try:
-            for ticker in WATCHLIST:
-
-                result, score = run_signal(ticker)
-
-                if result and score >= 3:
-                    msg = f"🔥 자동 감지\n{result}"
-                    send_message(chat_id, msg)
-
-                time.sleep(2)
-
-            print("1회 스캔 완료")
-
-        except Exception as e:
-            print("스캔 에러:", e)
-
-        time.sleep(60)
-
-# =========================
-# 웹훅
+# 🤖 텔레그램 웹훅
 # =========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
 
-    text = data.get("message", {}).get("text", "")
-    chat_id = data.get("message", {}).get("chat", {}).get("id")
-
-    print("📩 입력:", text)
-
-    if not chat_id:
+    if "message" not in data:
         return "ok"
 
-    text = text.strip()
+    chat_id = data["message"]["chat"]["id"]
+    text = data["message"].get("text", "")
 
-    # 🎲 로또
+    # =========================
+    # 🎲 로또 명령어
+    # =========================
     if "로또" in text:
-        nums = pick_lotto()
-        send_message(chat_id, f"🎲 로또 추천\n{nums}")
 
-    # 📈 시그널
-    elif "scan" in text.lower():
-        parts = text.split()
-        ticker = parts[1].upper() if len(parts) >= 2 else "AAPL"
-
-        result, _ = run_signal(ticker)
-
-        if result:
-            send_message(chat_id, result)
+        if "안정" in text:
+            mode = "stable"
+        elif "공격" in text:
+            mode = "attack"
+        elif "전체" in text:
+            mode = "all"
         else:
-            send_message(chat_id, "❌ 데이터 없음")
+            mode = "basic"
 
-    # 🔥 능동 시작
-    elif "start" in text.lower():
-        send_message(chat_id, "🔥 자동 스캔 시작")
+        results = generate_lotto_v2(mode)
 
-        thread = threading.Thread(target=auto_scan, args=(chat_id,))
-        thread.daemon = True
-        thread.start()
+        msg = f"🎲 로또 v2 추천 ({mode})\n\n"
+
+        for nums, sc in results:
+            save_lotto_log(nums, sc, mode)
+            msg += f"{nums}\n점수: {sc}/4\n\n"
+
+        send_message(chat_id, msg)
 
     else:
-        send_message(chat_id, "명령어:\n로또\nscan 종목\nstart")
+        send_message(chat_id, "명령어:\n로또 / 로또 안정 / 로또 공격 / 로또 전체")
 
     return "ok"
 
+
 # =========================
-# 실행
+# 🚀 서버 실행
 # =========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
