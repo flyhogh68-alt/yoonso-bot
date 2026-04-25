@@ -6,7 +6,9 @@ import random
 from datetime import datetime
 
 app = Flask(__name__)
-
+@app.route("/")
+def home():
+    return "alive"
 # =========================
 # 텔레그램 설정
 # =========================
